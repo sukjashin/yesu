@@ -1,0 +1,16 @@
+{
+  "name": "yeosu-weather-vite",
+  "version": "1.0.0",
+  "description": "2026 여수세계섬박람회 행사장 기상정보 서비스 - Vite + OpenStreetMap",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "vite": "^5.4.19",
+    "leaflet": "^1.9.4"
+  },
+  "devDependencies": {}
+}
