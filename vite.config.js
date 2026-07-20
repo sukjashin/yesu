@@ -83,7 +83,7 @@ function localApiPlugin() {
       });
 
       server.middlewares.use('/api/ferry', (req, res) => {
-        sendJson(res, 200, { ok: true, url: 'https://island.theksa.co.kr/page/booking', message: '실시간 운항정보 페이지로 연결합니다.', source: 'local' });
+        sendJson(res, 200, { ok: true, url: 'https://island.theksa.co.kr/page/booking?lang', message: '실시간 운항정보 페이지로 연결합니다.', source: 'local' });
       });
 
       server.middlewares.use('/api/weather', async (req, res) => {

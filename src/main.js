@@ -369,7 +369,7 @@ function getPublicLink(name, fallback) {
 function initPageLinks() {
   const links = {
     warning: getPublicLink("VITE_WARNING_URL", "https://www.weather.go.kr/w/weather/warning/status.do"),
-    ferry: getPublicLink("VITE_FERRY_URL", "https://island.theksa.co.kr/page/booking"),
+    ferry: getPublicLink("VITE_FERRY_URL", "https://island.theksa.co.kr/page/booking?lang"),
     radar: getPublicLink("VITE_RADAR_MORE_URL", "https://www.weather.go.kr/w/image/radar.do"),
     safety: getPublicLink("VITE_SAFETY_URL", "https://www.weather.go.kr/w/special/safetyguide/heavy-rain.do")
   };
