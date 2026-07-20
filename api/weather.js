@@ -1,21 +1,19 @@
 // 공공데이터포털 기상청 API 전용 날씨 프록시
 // - 초단기실황: VilageFcstInfoService_2.0/getUltraSrtNcst
 // - 초단기예보: VilageFcstInfoService_2.0/getUltraSrtFcst
-// - 중기예보: MidFcstInfoService/getMidLandFcst + getMidTa
+// - 중기예보: MidFcstInfoService/getMidLandFcst + getMidTa + getMidSeaFcst
 const VILAGE_BASE_URL = 'http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
 const MID_BASE_URL = 'http://apis.data.go.kr/1360000/MidFcstInfoService';
-const APIHUB_SEA_OBS_URL = 'https://apihub.kma.go.kr/api/typ01/url/sea_obs.php';
 
 const MID_LAND_REG_ID = '11F20000'; // 광주·전라남도(중기육상예보 공통 지역코드)
 const MID_TEMP_REG_ID = '11F20401'; // 여수(중기기온 지역코드) - 기상청 getMidTa가 인식하는 정식 코드
+const MID_SEA_REG_ID = '12B10000'; // 남해서부(중기해상예보 지역코드)
 
 const VENUES = {
   1: { id: 1, name: '주행사장', place: '돌산 진모지구', nx: '75', ny: '65', stnId: MID_TEMP_REG_ID, midLandRegId: MID_LAND_REG_ID, midTempRegId: MID_TEMP_REG_ID, awsName: '여수' },
-  2: { id: 2, name: '부행사장', place: '개도', nx: '74', ny: '61', stnId: MID_TEMP_REG_ID, midLandRegId: MID_LAND_REG_ID, midTempRegId: MID_TEMP_REG_ID, awsName: '여수' },
+  2: { id: 2, name: '부행사장', place: '개도', nx: '73', ny: '62', stnId: MID_TEMP_REG_ID, midLandRegId: MID_LAND_REG_ID, midTempRegId: MID_TEMP_REG_ID, awsName: '여수' },
   3: { id: 3, name: '부행사장', place: '금오도', nx: '74', ny: '61', stnId: MID_TEMP_REG_ID, midLandRegId: MID_LAND_REG_ID, midTempRegId: MID_TEMP_REG_ID, awsName: '여수' }
 };
-
-const MARINE_STATION_ID = '22103'; // 거문도: 여수 해상 관측 기준 지점
 
 function sendJson(res, status, body) {
   if (typeof res.status === 'function') return res.status(status).json(body);
@@ -98,90 +96,23 @@ function normalizeItems(data) {
   return Array.isArray(item) ? item : [item];
 }
 
-function formatTmKst(date = kstNow()) {
-  return `${formatDateKst(date)}${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}`;
-}
-
-function getSeaObsTimes(now = kstNow()) {
-  const base = new Date(now.getTime());
-  base.setUTCMinutes(0, 0, 0);
-  const times = [];
-  for (let back = 0; back <= 6; back += 1) {
-    const t = new Date(base.getTime() - back * 60 * 60 * 1000);
-    times.push(formatTmKst(t));
-  }
-  return times;
-}
-
 function valueOrDash(value, suffix = '') {
   const n = Number(value);
   if (value === undefined || value === null || value === '' || (Number.isFinite(n) && n <= -9)) return '-';
   return suffix ? `${value}${suffix}` : String(value);
 }
 
-function windDirKo(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n) || n < 0) return '';
-  const dirs = ['북', '북북동', '북동', '동북동', '동', '동남동', '남동', '남남동', '남', '남남서', '남서', '서남서', '서', '서북서', '북서', '북북서'];
-  return dirs[Math.round((n % 360) / 22.5) % 16];
+function formatWaveRange(min, max) {
+  const low = valueOrDash(min);
+  const high = valueOrDash(max);
+  if (low === '-' && high === '-') return '-';
+  if (low === high) return `${low}m`;
+  return `${low}-${high}m`;
 }
 
-function parseSeaObsText(text) {
-  const lines = String(text || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  let headers = null;
-  const rows = [];
-  const csvHeaders = ['TP', 'TM', 'STN_ID', 'STN_KO', 'LON', 'LAT', 'WH', 'WD', 'WS', 'WS_GST', 'TW', 'TA', 'PA', 'HM'];
-  const fallbackHeaders = ['TM', 'STN_ID', 'STN_KO', 'WH', 'WD', 'WS', 'WS_GST', 'TW', 'TA', 'PA', 'HM'];
-
-  for (const line of lines) {
-    const clean = line.replace(/^#\s?/, '').trim();
-    if (!headers && clean.includes('STN_ID') && clean.includes('STN_KO') && clean.includes('TM')) {
-      headers = clean.split(/\s+/);
-      continue;
-    }
-    if (line.startsWith('#') || /^[-=]+$/.test(clean) || /^START|^END/i.test(clean)) continue;
-
-    const isCsv = clean.includes(',');
-    const parts = isCsv
-      ? clean.split(',').map((part) => part.trim()).filter((part) => part !== '' && part !== '=')
-      : clean.split(/\s+/);
-    const names = isCsv ? csvHeaders : (headers && parts.length >= headers.length ? headers : fallbackHeaders);
-    if (parts.length < 4 || (!/^\d{10,12}$/.test(parts[0]) && !/^\d{10,12}$/.test(parts[1]))) continue;
-
-    const item = {};
-    names.forEach((name, idx) => { item[name] = parts[idx]; });
-    rows.push(item);
-  }
-  return rows;
-}
-
-function formatSeaObsTime(tm = '') {
-  const text = String(tm);
-  if (!/^\d{10,12}$/.test(text)) return text || '-';
-  return `${text.slice(4, 6)}/${text.slice(6, 8)} ${text.slice(8, 10)}:${text.slice(10, 12) || '00'}`;
-}
-
-function mapSeaObsRow(row) {
-  const windDir = windDirKo(row.WD);
-  return {
-    stationId: row.STN_ID || row.STN || '',
-    station: row.STN_KO || '-',
-    time: formatSeaObsTime(row.TM),
-    wave: valueOrDash(row.WH, 'm'),
-    wind: `${valueOrDash(row.WS, 'm/s')}${windDir ? ` (${windDir})` : ''}`,
-    gust: valueOrDash(row.WS_GST, 'm/s'),
-    seaTemp: valueOrDash(row.TW, '°C'),
-    airTemp: valueOrDash(row.TA, '°C'),
-    humidity: valueOrDash(row.HM, '%'),
-    pressure: valueOrDash(row.PA, 'hPa')
-  };
-}
-
-function pickMarineRows(rows) {
-  return rows
-    .map(mapSeaObsRow)
-    .filter((row) => row.stationId === MARINE_STATION_ID || row.station.includes('거문도'))
-    .slice(0, 1);
+function formatWaveValue(value) {
+  const text = valueOrDash(value);
+  return text === '-' ? '-' : `${text}m`;
 }
 
 function encodeServiceKey(serviceKey = '') {
@@ -230,29 +161,34 @@ async function callKma(url, params, serviceKey) {
   return data;
 }
 
-async function callSeaObs(authKey, tm) {
-  const qs = new URLSearchParams({ tm, stn: MARINE_STATION_ID, help: '0', authKey: String(authKey).trim() });
-  const apiRes = await fetch(`${APIHUB_SEA_OBS_URL}?${qs.toString()}`);
-  const text = new TextDecoder('euc-kr').decode(await apiRes.arrayBuffer());
-  if (!apiRes.ok) throw new Error(`APIHub 해양관측 응답 오류(${apiRes.status})`);
-  if (/ERROR|인증|auth|KEY/i.test(text) && !text.includes('STN_KO')) {
-    throw new Error('APIHub 해양관측 인증 또는 조회 오류');
-  }
-  return parseSeaObsText(text);
-}
-
-async function getSeaObsRows(authKey) {
+async function callMidSeaWithFallback(serviceKey) {
+  const now = kstNow();
+  const tried = new Set();
   let lastError;
-  for (const tm of getSeaObsTimes()) {
+
+  for (let offsetHours = 0; offsetHours <= 36; offsetHours += 12) {
+    const t = new Date(now.getTime() - offsetHours * 60 * 60 * 1000);
+    const tmFc = getMidTmFc(t);
+    if (tried.has(tmFc)) continue;
+    tried.add(tmFc);
+
     try {
-      const rows = await callSeaObs(authKey, tm);
-      if (rows.length) return { tm, rows: pickMarineRows(rows) };
-      lastError = new Error(`해양관측 조회 결과 없음(${tm})`);
+      const data = await callKma(`${MID_BASE_URL}/getMidSeaFcst`, {
+        pageNo: '1',
+        numOfRows: '10',
+        regId: MID_SEA_REG_ID,
+        tmFc
+      }, serviceKey);
+      const items = normalizeItems(data);
+      if (items.length) return { tmFc, items };
+      lastError = new Error(`중기해상예보 조회 결과 없음(${tmFc})`);
     } catch (error) {
       lastError = error;
+      const msg = String(error.message || '');
+      if (!msg.includes('NO_DATA') && !msg.includes('NODATA') && !msg.includes('조회된 데이터가 없습니다')) break;
     }
   }
-  throw lastError || new Error('해양관측 조회 결과가 없습니다.');
+  throw lastError || new Error('중기해상예보 조회 결과가 없습니다.');
 }
 
 async function callWithBaseFallback(makeBase, url, commonParams, serviceKey, maxBackHours = 5) {
@@ -406,13 +342,39 @@ function parseMidForecast(landItems, tempItems, baseYmd = formatDateKst(kstNow()
   return result;
 }
 
+function parseMidSeaForecast(seaItems, baseYmd) {
+  const sea = seaItems[0] || {};
+  const result = [];
+
+  for (let day = 4; day <= 10; day += 1) {
+    const date = ymdAddDays(baseYmd, day);
+    if (day <= 7) {
+      const am = sea[`wf${day}Am`] || '-';
+      const pm = sea[`wf${day}Pm`] || '-';
+      const waveAm = formatWaveRange(sea[`wh${day}AAm`], sea[`wh${day}BAm`]);
+      const wavePm = formatWaveRange(sea[`wh${day}APm`], sea[`wh${day}BPm`]);
+      if (am !== '-' || pm !== '-' || waveAm !== '-' || wavePm !== '-') {
+        result.push({ date, am, pm, waveAm, wavePm });
+      }
+    } else {
+      const weather = sea[`wf${day}`] || '-';
+      const wave = formatWaveRange(sea[`wh${day}A`], sea[`wh${day}B`]);
+      if (weather !== '-' || wave !== '-') {
+        result.push({ date, am: weather, pm: weather, waveAm: wave, wavePm: wave });
+      }
+    }
+  }
+
+  return result;
+}
+
 // 단기예보(getVilageFcst) 원자료를 날짜별로 묶습니다.
-function groupShortFcstByDate(items, todayStr) {
+function groupShortFcstByDate(items, todayStr, { includeToday = false } = {}) {
   const byDate = new Map();
   for (const item of items) {
     const date = item.fcstDate;
-    if (!date || date <= todayStr) continue; // 오늘은 초단기예보 탭에서 별도로 보여주므로 제외
-    if (!byDate.has(date)) byDate.set(date, { TMP: [], SKY: {}, PTY: {}, POP: {}, TMN: null, TMX: null });
+    if (!date || (!includeToday && date <= todayStr) || (includeToday && date < todayStr)) continue;
+    if (!byDate.has(date)) byDate.set(date, { TMP: [], SKY: {}, PTY: {}, POP: {}, WAV: {}, TMN: null, TMX: null });
     const bucket = byDate.get(date);
     const time = item.fcstTime;
     const value = item.fcstValue;
@@ -420,6 +382,7 @@ function groupShortFcstByDate(items, todayStr) {
     if (item.category === 'SKY') bucket.SKY[time] = value;
     if (item.category === 'PTY') bucket.PTY[time] = value;
     if (item.category === 'POP') bucket.POP[time] = Number(value);
+    if (item.category === 'WAV') bucket.WAV[time] = value;
     if (item.category === 'TMN') bucket.TMN = Number(value);
     if (item.category === 'TMX') bucket.TMX = Number(value);
   }
@@ -458,15 +421,34 @@ function buildShortDayRow(date, bucket) {
   return { date, am, pm, rnAm, rnPm, min, max };
 }
 
-async function getShortForecastRows(venue, serviceKey) {
+function buildShortMarineRow(date, bucket) {
+  const skyAm = pickNearestTime(bucket.SKY, 9);
+  const ptyAm = pickNearestTime(bucket.PTY, 9);
+  const skyPm = pickNearestTime(bucket.SKY, 15);
+  const ptyPm = pickNearestTime(bucket.PTY, 15);
+  const am = (ptyAm && ptyAm !== '0') ? ptyText(ptyAm) : skyText(skyAm);
+  const pm = (ptyPm && ptyPm !== '0') ? ptyText(ptyPm) : skyText(skyPm);
+  const waveAm = formatWaveValue(pickNearestTime(bucket.WAV, 9));
+  const wavePm = formatWaveValue(pickNearestTime(bucket.WAV, 15));
+  return { date, am, pm, waveAm, wavePm };
+}
+
+async function getShortForecastRows(venue, serviceKey, { includeToday = false } = {}) {
   const common = { pageNo: '1', numOfRows: '1000', nx: venue.nx, ny: venue.ny };
   const { items } = await callWithBaseFallback(getVilageFcstBase, `${VILAGE_BASE_URL}/getVilageFcst`, common, serviceKey, 4);
   const todayStr = formatDateKst(kstNow());
-  const byDate = groupShortFcstByDate(items, todayStr);
-  const dates = Array.from(byDate.keys()).sort().slice(0, 2); // 내일, 모레 2일만 사용(중기예보 3일차부터와 중복 방지)
-  const thirdDate = Array.from(byDate.keys()).sort()[2];
-  if (thirdDate && !dates.includes(thirdDate)) dates.push(thirdDate);
+  const byDate = groupShortFcstByDate(items, todayStr, { includeToday });
+  const dates = Array.from(byDate.keys()).sort().slice(0, 3);
   return dates.map((date) => buildShortDayRow(date, byDate.get(date)));
+}
+
+async function getShortMarineRows(venue, serviceKey) {
+  const common = { pageNo: '1', numOfRows: '1000', nx: venue.nx, ny: venue.ny };
+  const { items, base } = await callWithBaseFallback(getVilageFcstBase, `${VILAGE_BASE_URL}/getVilageFcst`, common, serviceKey, 4);
+  const todayStr = formatDateKst(kstNow());
+  const byDate = groupShortFcstByDate(items, todayStr);
+  const dates = Array.from(byDate.keys()).sort().slice(0, 3);
+  return { base, rows: dates.map((date) => buildShortMarineRow(date, byDate.get(date))) };
 }
 
 function mergeForecastRows(...rowGroups) {
@@ -538,12 +520,12 @@ async function getMidForecast(venue, serviceKey) {
   const [mid, shortRows] = await Promise.all([
     callMidBothWithFallback(venue, serviceKey),
     getShortForecastRows(venue, serviceKey).catch((error) => {
-      console.warn('단기예보(내일·모레) 조회 실패:', error.message);
+      console.warn('단기예보(내일부터 3일) 조회 실패:', error.message);
       return [];
     })
   ]);
   const midRows = parseMidForecast(mid.landItems, mid.tempItems, mid.tmFc.slice(0, 8));
-  const combined = mergeForecastRows(shortRows, midRows);
+  const combined = mergeForecastRows(shortRows, midRows).slice(0, 3);
   return { ...venue, tmFc: mid.tmFc, midterm: combined };
 }
 
@@ -555,14 +537,18 @@ export default async function handler(req, res) {
 
   try {
     if (type === 'marine') {
-      const apiHubKey = process.env.KMA_APIHUB_AUTH_KEY || process.env.VITE_KMA_APIHUB_AUTH_KEY;
-      if (!apiHubKey || String(apiHubKey).includes('여기에_APIHub_인증키')) {
-        return sendJson(res, 200, { ok: false, resultCode: 'NO_APIHUB_KEY', type, items: [], message: 'KMA_APIHUB_AUTH_KEY가 설정되지 않았습니다.' });
+      if (!serviceKey || String(serviceKey).includes('여기에_공공데이터포털_인증키')) {
+        return sendJson(res, 200, { ok: false, resultCode: 'NO_SERVICE_KEY', type, items: [], message: 'KMA_SERVICE_KEY가 설정되지 않았습니다.' });
       }
       const targets = venue ? [venue] : Object.values(VENUES);
-      const sea = await getSeaObsRows(apiHubKey);
-      const results = targets.map((target) => ({ ...target, marine: sea.rows, seaObsTm: sea.tm }));
-      return sendJson(res, 200, { ok: true, type, items: results, message: 'APIHub 해양관측 조회 성공' });
+      const settled = await Promise.allSettled(targets.map((target) => getShortMarineRows(target, serviceKey)));
+      const results = settled.map((r, idx) => (
+        r.status === 'fulfilled'
+          ? { ...targets[idx], marine: r.value.rows, marineBase: r.value.base }
+          : { ...targets[idx], marine: [], errors: [r.reason?.message || '단기해양예보 조회 실패'] }
+      ));
+      const hasData = results.some((item) => item.marine?.length);
+      return sendJson(res, 200, { ok: hasData, type, items: results, message: hasData ? '단기해양예보 조회 성공' : '단기해양예보 조회 결과가 없습니다.' });
     }
 
     if (!serviceKey || String(serviceKey).includes('여기에_공공데이터포털_인증키')) {

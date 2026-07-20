@@ -15,7 +15,7 @@
       </div>
       <div class="brand-text">
         <div class="title">2026 여수세계섬박람회</div>
-        <div class="subtitle">탐방객 기상정보 서비스</div>
+        <div class="subtitle">관람객 기상정보 서비스</div>
       </div>
     </div>
     <nav class="main-nav">
@@ -62,7 +62,10 @@
       <div class="location-head-note">장소 : 주행사장(돌산 진모지구), 부행사장(개도), 부행사장(금오도)</div>
       <div class="warn-banner">
         <span class="tag">특보내용</span>
-        <span>폭염주의보 : 여수시</span>
+        <div class="warn-marquee" aria-live="polite">
+          <span class="warn-text">특보 정보를 불러오는 중입니다.</span>
+          <span class="warn-text warn-text-copy" aria-hidden="true">특보 정보를 불러오는 중입니다.</span>
+        </div>
       </div>
       <div id="map"></div>
     </section>
@@ -138,8 +141,7 @@
     </div>
     <div class="fm-tabs">
       <button class="fm-tab active" data-tab="ultra">초단기예보</button>
-      <button class="fm-tab" data-tab="midterm">중기예보</button>
-      <button class="fm-tab" data-tab="marine">해상날씨</button>
+      <button class="fm-tab" data-tab="combined">단기 · 해양 날씨</button>
     </div>
     <div class="fm-body" id="fmBody"></div>
   </div>

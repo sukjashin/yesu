@@ -81,6 +81,41 @@ function initRefreshButton() {
   });
 }
 
+function setActiveMainNav(targetHref) {
+  document.querySelectorAll(".main-nav a").forEach((link) => {
+    link.classList.toggle("active", link.getAttribute("href") === targetHref);
+  });
+}
+
+function resetHomeView() {
+  setActiveMainNav("#home");
+
+  document.querySelectorAll(".venue-tab").forEach((tab) => {
+    tab.classList.toggle("active", Number(tab.dataset.venue) === 1);
+  });
+
+  const mapModule = window.yeosuMap;
+  if (mapModule?.map) {
+    const venueLocations = Object.values(venueData).map((venue) => [venue.lat, venue.lng]);
+    mapModule.map.closePopup();
+    if (venueLocations.length) {
+      mapModule.map.fitBounds(venueLocations, {
+        padding: [40, 40],
+        maxZoom: 12
+      });
+    }
+  }
+
+  if (typeof window.closeForecastModal === "function") {
+    window.closeForecastModal();
+  }
+
+  if (window.location.hash) {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
 function formatRadarLabel(value) {
   if (!value) return '';
   const text = String(value);
@@ -255,19 +290,25 @@ async function loadRadarPanel() {
 
 async function loadWarningPanel() {
   const warnBanner = document.querySelector(".warn-banner");
-  const warnText = warnBanner?.querySelector("span:not(.tag)");
-  if (!warnText) return;
+  const warnTexts = warnBanner?.querySelectorAll(".warn-text");
+  if (!warnTexts?.length) return;
+
+  const setWarningText = (value) => {
+    warnTexts.forEach((item) => {
+      item.textContent = value;
+    });
+  };
 
   try {
-    warnText.textContent = "예보·특보 정보를 불러오는 중입니다.";
+    setWarningText("예보·특보 정보를 불러오는 중입니다.");
     const warning = await api.getWarning();
-    warnText.textContent = warning?.displayText || "내용없음";
+    setWarningText(warning?.displayText || "내용없음");
     warnBanner.classList.toggle("is-error", warning?.ok === false);
     if (warning?.time) warnBanner.title = `발표시각: ${formatRadarLabel(warning.time)}`;
     if (warning?.errors?.length) console.warn("특보 조회 상세 오류:", warning.errors);
   } catch (error) {
     console.error("예보·특보 표시 실패:", error);
-    warnText.textContent = "내용없음";
+    setWarningText("내용없음");
   }
 }
 
@@ -333,9 +374,17 @@ function initPageLinks() {
     safety: getPublicLink("VITE_SAFETY_URL", "https://www.weather.go.kr/w/special/safetyguide/heavy-rain.do")
   };
 
+  document.querySelectorAll('a[href="#home"]').forEach((el) => {
+    el.addEventListener("click", (event) => {
+      event.preventDefault();
+      resetHomeView();
+    });
+  });
+
   document.querySelectorAll('a[href="#forecast"]').forEach((el) => {
     el.addEventListener("click", (event) => {
       event.preventDefault();
+      setActiveMainNav("#forecast");
       openInNewTab(links.warning);
     });
   });

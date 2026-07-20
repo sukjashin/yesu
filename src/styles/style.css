@@ -56,13 +56,30 @@
   }
   .brand-text .title{font-size:16px;font-weight:800;color:var(--navy-900);line-height:1.3;}
   .brand-text .subtitle{font-size:12px;color:var(--ink-soft);margin-top:2px;}
-  nav.main-nav{display:flex; gap:36px;}
+  nav.main-nav{display:flex; gap:36px; flex-shrink:0;}
   nav.main-nav a{
     font-size:15px; font-weight:600; color:var(--ink-soft);
     padding:6px 2px; border-bottom:2px solid transparent;
   }
   nav.main-nav a.active{color:var(--navy-900); border-bottom-color:var(--navy-900);}
-  @media (max-width:900px){ nav.main-nav{display:none;} }
+  @media (max-width:900px){
+    .header-inner{gap:14px;}
+    .brand{min-width:0;}
+    .brand-mark{width:38px;height:38px;border-radius:10px;}
+    .brand-text{min-width:0;}
+    .brand-text .title{font-size:14px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+    .brand-text .subtitle{font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+    nav.main-nav{gap:18px;}
+    nav.main-nav a{font-size:14px; padding:6px 1px; white-space:nowrap;}
+  }
+  @media (max-width:420px){
+    .header-inner{gap:10px;}
+    .brand-mark{width:34px;height:34px;}
+    .brand-text .title{font-size:13px;}
+    .brand-text .subtitle{display:none;}
+    nav.main-nav{gap:12px;}
+    nav.main-nav a{font-size:13px;}
+  }
 
   /* ===== Hero ===== */
   .hero-wrap{padding:24px 0 0;}
@@ -183,11 +200,28 @@
   .warn-banner{
     margin:12px 20px 0; background:var(--warn-bg); border:1px solid var(--warn-border);
     border-radius:10px; padding:10px 14px; font-size:12.5px; color:#7a3d12; line-height:1.6;
-    display:flex; gap:8px;
+    display:flex; gap:10px; align-items:center; overflow:hidden;
   }
   .warn-banner .tag{
     background:#e14b3d; color:#fff; font-weight:800; font-size:11px;
     padding:2px 8px; border-radius:6px; flex-shrink:0; height:fit-content;
+  }
+  .warn-marquee{
+    flex:1; min-width:0; overflow:hidden; white-space:nowrap;
+  }
+  .warn-text{
+    display:inline-block; min-width:100%; padding-right:48px;
+    font-weight:700; will-change:transform;
+    animation:warnMarquee 24s linear infinite;
+  }
+  .warn-banner:hover .warn-text{animation-play-state:paused;}
+  @keyframes warnMarquee{
+    0%{transform:translateX(0);}
+    100%{transform:translateX(-100%);}
+  }
+  @media (prefers-reduced-motion: reduce){
+    .warn-text{animation:none;}
+    .warn-text-copy{display:none;}
   }
 
   #map{ height:340px; margin:14px 20px 20px; border-radius:14px; overflow:hidden; border:1px solid var(--line); z-index:1;}
@@ -227,7 +261,7 @@
     padding:20px; z-index:2000;
   }
   .forecast-modal{
-    background:#fff; width:100%; max-width:420px; max-height:82vh;
+    background:#fff; width:100%; max-width:760px; max-height:82vh;
     border-radius:18px; overflow:hidden; display:flex; flex-direction:column;
     box-shadow:0 24px 60px -20px rgba(10,20,50,0.45);
   }
@@ -271,6 +305,41 @@
   .fm-table .wx-day{font-size:12.5px; font-weight:800; color:var(--navy-800);}
   .fm-table .wx-date{font-size:10.5px; color:var(--ink-soft); margin-top:1px;}
   .fm-note{font-size:11px; color:var(--ink-soft); margin-top:10px; line-height:1.5;}
+
+  /* ===== 중기 · 해양 날씨 통합 표 ===== */
+  .combo-forecast{display:flex; flex-direction:column; gap:14px;}
+  .combo-issued{font-size:14px; color:var(--ink); padding:0 2px 2px;}
+  .combo-section{overflow-x:auto; border:1px solid var(--line); border-radius:10px;}
+  .combo-table{
+    width:100%; min-width:620px; border-collapse:collapse; table-layout:fixed;
+    font-size:13px; background:#fff;
+  }
+  .combo-table th,
+  .combo-table td{
+    border:1px solid #dfe5ef; padding:9px 6px; text-align:center; vertical-align:middle;
+  }
+  .combo-table thead th{
+    background:#f1f4f9; color:#111827; font-weight:800;
+  }
+  .combo-table .side-head{width:86px;}
+  .combo-table tbody th{
+    background:#fafbfd; color:#111827; font-weight:800;
+  }
+  .combo-date-main{font-size:14px; font-weight:800;}
+  .combo-date-sub{font-size:11px; color:#2383bd; margin-top:2px;}
+  .combo-icon{font-size:25px; line-height:1.15; min-height:30px;}
+  .combo-label{font-size:11px; color:var(--ink-soft); margin-top:2px; white-space:nowrap;}
+  .combo-table .temp-min{color:#2f6bd8; font-weight:800;}
+  .combo-table .temp-max{color:#c4312b; font-weight:800;}
+  .marine-table .side-head{width:82px;}
+  .marine-table tbody th:nth-child(2){width:72px;}
+  @media (max-width:768px){
+    .forecast-modal{max-width:calc(100vw - 24px);}
+    .combo-table{min-width:560px; font-size:12px;}
+    .combo-table th,
+    .combo-table td{padding:8px 4px;}
+    .combo-icon{font-size:22px;}
+  }
 
   /* ===== 중기예보 - 날씨누리 참고 세로 카드 리스트 ===== */
   .mid-summary{

@@ -1,6 +1,7 @@
 const DEFAULT_REG_ID = '4613000000'; // 전남 여수시 행정구역 코드
 const EMPTY_WARNING_TEXT = '내용없음';
 const WARNING_URL = 'https://apis.data.go.kr/1360000/VilageFcstMsgService/getWthrWrnInfo';
+const KMA_WARNING_HTML_URL = 'https://www.weather.go.kr/w/wnuri-fct2021/weather/warning.do';
 
 function sendJson(res, status, body) {
   if (typeof res.status === 'function') return res.status(status).json(body);
@@ -35,11 +36,23 @@ function decodeXml(value = '') {
     .replace(/&#39;/g, "'");
 }
 
+function decodeHtml(value = '') {
+  return decodeXml(value)
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&#40;/g, '(')
+    .replace(/&#41;/g, ')')
+    .replace(/&#44;/g, ',');
+}
+
 function normalizeText(value = '') {
   return String(value)
     .replace(/\r?\n/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function stripTags(value = '') {
+  return normalizeText(decodeHtml(String(value).replace(/<br\s*\/?>/gi, ' ').replace(/<[^>]+>/g, ' ')));
 }
 
 function pickTag(xml, tag) {
@@ -77,6 +90,16 @@ function isGenericWarningNotice(value = '') {
 function shorten(value = '', max = 180) {
   const text = normalizeText(value);
   return text.length > max ? `${text.slice(0, max)}…` : text;
+}
+
+function isYeosuIncludedArea(text = '') {
+  const value = normalizeText(text);
+  if (value.includes('여수')) return true;
+  if (!value.includes('전라남도')) return false;
+
+  // "전라남도(흑산도.홍도, 거문도.초도, 완도여서도 제외)"처럼
+  // 제외 지역만 괄호에 표기된 경우 여수시는 전라남도 전체 대상에 포함됩니다.
+  return value.includes('제외') && !value.includes('여수 제외') && !value.includes('여수시 제외');
 }
 
 function includesTargetArea(item, regId) {
@@ -134,6 +157,63 @@ async function fetchWarning(query, serviceKey) {
   return { ok, status: apiRes.status, resultCode, resultMsg, items, regId };
 }
 
+function extractAnnouncementTime(html = '') {
+  const match = String(html).match(/발표시각\s*<\/strong>\s*:\s*([^<]+)/i);
+  return match ? stripTags(match[1]) : '';
+}
+
+function extractWeatherNuriRows(html = '') {
+  const rows = [];
+  const rowPattern = /<tr[^>]*data-type="([^"]+)"[^>]*data-level="([^"]+)"[^>]*>([\s\S]*?)<\/tr>/gi;
+  let rowMatch;
+
+  while ((rowMatch = rowPattern.exec(String(html)))) {
+    const cells = Array.from(rowMatch[3].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)).map((cell) => stripTags(cell[1]));
+    if (cells.length < 5) continue;
+    const [kind, level, area, announcedAt, effectiveAt, clearText = ''] = cells;
+    if (!kind || !level || !area) continue;
+    rows.push({ kind, level, area, announcedAt, effectiveAt, clearText });
+  }
+
+  return rows;
+}
+
+function makeWeatherNuriDisplayText(rows = []) {
+  const targetRows = rows.filter((row) => isYeosuIncludedArea(row.area));
+  if (!targetRows.length) return EMPTY_WARNING_TEXT;
+
+  const byWarning = new Map();
+  for (const row of targetRows) {
+    const key = `${row.kind}${row.level}`;
+    if (!byWarning.has(key)) {
+      const area = row.area.includes('여수')
+        ? '여수시'
+        : row.area.includes('전라남도')
+          ? '여수시 포함 전라남도'
+          : row.area;
+      byWarning.set(key, `${row.kind}${row.level} : ${area}`);
+    }
+  }
+
+  return shorten(Array.from(byWarning.values()).join('  ·  '), 260);
+}
+
+async function fetchWeatherNuriWarning() {
+  const response = await fetch(KMA_WARNING_HTML_URL);
+  const html = await response.text();
+  if (!response.ok) throw new Error(`날씨누리 특보 조회 실패(${response.status})`);
+
+  const rows = extractWeatherNuriRows(html);
+  const displayText = makeWeatherNuriDisplayText(rows);
+  return {
+    ok: displayText !== EMPTY_WARNING_TEXT,
+    displayText,
+    time: extractAnnouncementTime(html),
+    rows,
+    status: response.status
+  };
+}
+
 export default async function handler(req, res) {
   const query = getQuery(req);
   const serviceKey = getEnv('KMA_SERVICE_KEY', getEnv('VITE_KMA_SERVICE_KEY'));
@@ -154,15 +234,19 @@ export default async function handler(req, res) {
   try {
     const result = await fetchWarning(query, serviceKey);
     if (!result.ok) {
+      const fallback = await fetchWeatherNuriWarning();
       return sendJson(res, 200, {
-        ok: false,
+        ok: fallback.ok,
         resultCode: result.resultCode,
         resultMsg: result.resultMsg,
-        message: '기상특보 API를 조회하지 못했습니다.',
-        displayText: EMPTY_WARNING_TEXT,
+        message: fallback.ok ? '날씨누리 기상특보 조회 성공' : '현재 여수시에 발표된 특보가 없습니다.',
+        displayText: fallback.displayText,
+        time: fallback.time,
         regId,
-        items: result.items,
-        status: result.status
+        source: '기상청 날씨누리 특보 현황',
+        items: fallback.rows,
+        status: fallback.status,
+        fallbackFrom: '공공데이터포털 VilageFcstMsgService/getWthrWrnInfo'
       });
     }
 
@@ -180,13 +264,27 @@ export default async function handler(req, res) {
       status: result.status
     });
   } catch (error) {
-    return sendJson(res, 200, {
-      ok: false,
-      message: '기상특보 API를 조회하지 못했습니다.',
-      displayText: EMPTY_WARNING_TEXT,
-      regId,
-      items: [],
-      errors: [error.message]
-    });
+    try {
+      const fallback = await fetchWeatherNuriWarning();
+      return sendJson(res, 200, {
+        ok: fallback.ok,
+        message: fallback.ok ? '날씨누리 기상특보 조회 성공' : '현재 여수시에 발표된 특보가 없습니다.',
+        displayText: fallback.displayText,
+        time: fallback.time,
+        regId,
+        source: '기상청 날씨누리 특보 현황',
+        items: fallback.rows,
+        errors: [error.message]
+      });
+    } catch (fallbackError) {
+      return sendJson(res, 200, {
+        ok: false,
+        message: '기상특보 API를 조회하지 못했습니다.',
+        displayText: EMPTY_WARNING_TEXT,
+        regId,
+        items: [],
+        errors: [error.message, fallbackError.message]
+      });
+    }
   }
 }

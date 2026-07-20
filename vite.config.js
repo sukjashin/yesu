@@ -55,7 +55,7 @@ function localApiPlugin() {
           kmaConfigured: Boolean(env.KMA_SERVICE_KEY || env.VITE_KMA_SERVICE_KEY),
           radarConfigured: Boolean(env.RADAR_SERVICE_KEY || env.VITE_RADAR_SERVICE_KEY),
           warningConfigured: Boolean(env.KMA_SERVICE_KEY || env.VITE_KMA_SERVICE_KEY),
-          marineConfigured: Boolean(env.KMA_APIHUB_AUTH_KEY || env.VITE_KMA_APIHUB_AUTH_KEY),
+          marineConfigured: Boolean(env.KMA_SERVICE_KEY || env.VITE_KMA_SERVICE_KEY),
           ferryConfigured: true,
           warningMode: '공공데이터포털'
         });
@@ -89,7 +89,6 @@ function localApiPlugin() {
       server.middlewares.use('/api/weather', async (req, res) => {
         req.query = Object.fromEntries(new URL(req.url || '/', 'http://localhost').searchParams.entries());
         process.env.KMA_SERVICE_KEY = getEnv('KMA_SERVICE_KEY', getEnv('VITE_KMA_SERVICE_KEY'));
-        process.env.KMA_APIHUB_AUTH_KEY = getEnv('KMA_APIHUB_AUTH_KEY', getEnv('VITE_KMA_APIHUB_AUTH_KEY'));
         await weatherHandler(req, res);
       });
     }

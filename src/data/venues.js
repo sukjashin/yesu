@@ -13,8 +13,8 @@ export const venueData = {
     id: 2,
     name: "부행사장",
     place: "개도",
-    lat: 34.5451, lng: 127.7088,
-    nx: 74, ny: 61,
+    lat: 34.5725, lng: 127.6666,
+    nx: 73, ny: 62,
     stnId: "11F20401", awsName: "여수",
     temp: null, feels: null, humidity: null, wind: null,
     sky: "조회중", icon: "🌡️", color: "#2f7d4f"
