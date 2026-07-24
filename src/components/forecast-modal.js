@@ -241,8 +241,11 @@ async function loadTabData(tab, venueId) {
       ]);
       const midItem = midData.items?.[0] || {};
       const marineItem = marineData.items?.[0] || {};
-      if (!midData.ok) console.warn(midData.message || '단기예보 API 응답 오류');
-      if (!marineData.ok) console.warn(marineData.message || '해양예보 API 응답 오류');
+      if (!midData.ok && !marineData.ok) {
+        throw new Error([midData.error || midData.message, marineData.error || marineData.message].filter(Boolean).join(' / '));
+      }
+      if (!midData.ok) console.warn(midData.error || midData.message || '단기예보 API 응답 오류');
+      if (!marineData.ok) console.warn(marineData.error || marineData.message || '해양예보 API 응답 오류');
       liveForecast.combined[venueId] = {
         midterm: midItem.midterm || [],
         marine: marineItem.marine || [],
@@ -255,7 +258,7 @@ async function loadTabData(tab, venueId) {
 
     const data = await api.getWeather({ type: tab === 'midterm' ? 'midterm' : (tab === 'marine' ? 'marine' : 'ultra'), venueId });
     const item = data.items?.[0];
-    if (!data.ok) console.warn(data.message || 'API 응답 오류');
+    if (!data.ok) throw new Error(data.error || data.message || 'API 응답 오류');
     if (item?.errors?.length) console.warn('상세 예보 일부 조회 오류:', item.errors);
     if (tab === 'midterm') liveForecast.midterm[venueId] = item?.midterm || [];
     else if (tab === 'marine') liveForecast.marine[venueId] = item?.marine || [];

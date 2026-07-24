@@ -2,8 +2,12 @@
 // - 초단기실황: VilageFcstInfoService_2.0/getUltraSrtNcst
 // - 초단기예보: VilageFcstInfoService_2.0/getUltraSrtFcst
 // - 중기예보: MidFcstInfoService/getMidLandFcst + getMidTa + getMidSeaFcst
-const VILAGE_BASE_URL = 'http://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
-const MID_BASE_URL = 'http://apis.data.go.kr/1360000/MidFcstInfoService';
+const VILAGE_BASE_URL = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2.0';
+const MID_BASE_URL = 'https://apis.data.go.kr/1360000/MidFcstInfoService';
+const KMA_REQUEST_TIMEOUT_MS = 7000;
+const KMA_REQUEST_RETRIES = 2;
+const WEATHER_CACHE_TTL_MS = 5 * 60 * 1000;
+const weatherCache = new Map();
 
 const MID_LAND_REG_ID = '11F20000'; // 광주·전라남도(중기육상예보 공통 지역코드)
 const MID_TEMP_REG_ID = '11F20401'; // 여수(중기기온 지역코드) - 기상청 getMidTa가 인식하는 정식 코드
@@ -20,6 +24,35 @@ function sendJson(res, status, body) {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.end(JSON.stringify(body));
+}
+
+function summarizeErrors(items = []) {
+  return items
+    .flatMap((item) => Array.isArray(item?.errors) ? item.errors : [])
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(' / ');
+}
+
+async function withWeatherCache(key, loader) {
+  const now = Date.now();
+  const cached = weatherCache.get(key);
+  if (cached && cached.expiresAt > now) return cached.value;
+  if (cached?.promise) return cached.promise;
+
+  const promise = Promise.resolve()
+    .then(loader)
+    .then((value) => {
+      weatherCache.set(key, { value, expiresAt: Date.now() + WEATHER_CACHE_TTL_MS });
+      return value;
+    })
+    .catch((error) => {
+      weatherCache.delete(key);
+      throw error;
+    });
+
+  weatherCache.set(key, { promise, expiresAt: now + WEATHER_CACHE_TTL_MS });
+  return promise;
 }
 
 function getQuery(req) {
@@ -135,10 +168,27 @@ function pickTag(xml, tag) {
   return match ? decodeXml(match[1]).replace(/\s+/g, ' ').trim() : '';
 }
 
-async function callKma(url, params, serviceKey) {
+function isRetryableKmaError(error) {
+  const status = Number(error?.status);
+  const code = String(error?.resultCode || '');
+  return error?.name === 'AbortError'
+    || error?.name === 'TimeoutError'
+    || error?.name === 'TypeError' // fetch 연결/DNS 오류
+    || status === 408
+    || status === 429
+    || status >= 500
+    || code === '01' // APPLICATION_ERROR
+    || code === '02'; // DB_ERROR
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function callKmaOnce(url, params, serviceKey) {
   const qs = new URLSearchParams({ ...params, dataType: 'JSON' });
   const fullUrl = `${url}?serviceKey=${encodeServiceKey(serviceKey)}&${qs.toString()}`;
-  const apiRes = await fetch(fullUrl);
+  const apiRes = await fetch(fullUrl, { signal: AbortSignal.timeout(KMA_REQUEST_TIMEOUT_MS) });
   const text = await apiRes.text();
   let data;
 
@@ -147,7 +197,10 @@ async function callKma(url, params, serviceKey) {
   } catch {
     const resultCode = pickTag(text, 'resultCode') || pickTag(text, 'returnAuthMsg');
     const resultMsg = pickTag(text, 'resultMsg') || pickTag(text, 'returnReasonCode') || text.slice(0, 180);
-    throw new Error(`기상청 API XML 오류: ${resultCode ? resultCode + ' ' : ''}${resultMsg}`);
+    const error = new Error(`기상청 API XML 오류: ${resultCode ? resultCode + ' ' : ''}${resultMsg}`);
+    error.status = apiRes.status;
+    error.resultCode = resultCode;
+    throw error;
   }
 
   const header = data?.response?.header || {};
@@ -155,10 +208,25 @@ async function callKma(url, params, serviceKey) {
   const ok = apiRes.ok && (resultCode === '00' || resultCode === '0' || resultCode === '');
   if (!ok) {
     const err = new Error(header.resultMsg || `기상청 API 응답 오류(${apiRes.status})`);
+    err.status = apiRes.status;
     err.resultCode = resultCode;
     throw err;
   }
   return data;
+}
+
+async function callKma(url, params, serviceKey) {
+  let lastError;
+  for (let attempt = 0; attempt < KMA_REQUEST_RETRIES; attempt += 1) {
+    try {
+      return await callKmaOnce(url, params, serviceKey);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableKmaError(error) || attempt === KMA_REQUEST_RETRIES - 1) throw error;
+      await wait(250 * (2 ** attempt));
+    }
+  }
+  throw lastError;
 }
 
 async function callMidSeaWithFallback(serviceKey) {
@@ -463,50 +531,29 @@ function mergeForecastRows(...rowGroups) {
   return Array.from(byDate.values()).sort((a, b) => a.date.localeCompare(b.date));
 }
 
-async function getYesterdayTemp(venue, todayBase, serviceKey) {
-  try {
-    const y = Number(todayBase.baseDate.slice(0, 4));
-    const m = Number(todayBase.baseDate.slice(4, 6)) - 1;
-    const d = Number(todayBase.baseDate.slice(6, 8));
-    const dt = new Date(Date.UTC(y, m, d));
-    dt.setUTCDate(dt.getUTCDate() - 1);
-    const yBaseDate = formatDateKst(dt);
-    const data = await callKma(`${VILAGE_BASE_URL}/getUltraSrtNcst`, {
-      pageNo: '1', numOfRows: '1000', nx: venue.nx, ny: venue.ny,
-      base_date: yBaseDate, base_time: todayBase.baseTime
-    }, serviceKey);
-    const items = normalizeItems(data);
-    const t1h = items.find((it) => it.category === 'T1H');
-    return t1h ? Number(t1h.obsrValue) : null;
-  } catch {
-    return null;
-  }
-}
-
 async function getVenueWeather(venue, serviceKey) {
   const common = { pageNo: '1', numOfRows: '1000', nx: venue.nx, ny: venue.ny };
   const result = { ...venue, current: {}, ultra: [], errors: [] };
 
-  try {
-    const ncst = await callWithBaseFallback(getUltraNcstBase, `${VILAGE_BASE_URL}/getUltraSrtNcst`, common, serviceKey);
+  const [ncstResult, fcstResult] = await Promise.allSettled([
+    callWithBaseFallback(getUltraNcstBase, `${VILAGE_BASE_URL}/getUltraSrtNcst`, common, serviceKey),
+    callWithBaseFallback(getUltraFcstBase, `${VILAGE_BASE_URL}/getUltraSrtFcst`, common, serviceKey)
+  ]);
+
+  if (ncstResult.status === 'fulfilled') {
+    const ncst = ncstResult.value;
     result.ncstBase = ncst.base;
     result.current = parseNcst(ncst.items);
-
-    const yesterdayTemp = await getYesterdayTemp(venue, ncst.base, serviceKey);
-    if (yesterdayTemp !== null && result.current.temp !== null) {
-      result.current.yesterdayTemp = yesterdayTemp;
-      result.current.tempDiff = Math.round((result.current.temp - yesterdayTemp) * 10) / 10;
-    }
-  } catch (error) {
-    result.errors.push(`초단기실황: ${error.message}`);
+  } else {
+    result.errors.push(`초단기실황: ${ncstResult.reason?.message || '조회 실패'}`);
   }
 
-  try {
-    const fcst = await callWithBaseFallback(getUltraFcstBase, `${VILAGE_BASE_URL}/getUltraSrtFcst`, common, serviceKey);
+  if (fcstResult.status === 'fulfilled') {
+    const fcst = fcstResult.value;
     result.fcstBase = fcst.base;
     result.ultra = parseUltraFcst(fcst.items);
-  } catch (error) {
-    result.errors.push(`초단기예보: ${error.message}`);
+  } else {
+    result.errors.push(`초단기예보: ${fcstResult.reason?.message || '조회 실패'}`);
   }
 
   if (!result.ultra.length && !Object.keys(result.current).length) {
@@ -541,14 +588,23 @@ export default async function handler(req, res) {
         return sendJson(res, 200, { ok: false, resultCode: 'NO_SERVICE_KEY', type, items: [], message: 'KMA_SERVICE_KEY가 설정되지 않았습니다.' });
       }
       const targets = venue ? [venue] : Object.values(VENUES);
-      const settled = await Promise.allSettled(targets.map((target) => getShortMarineRows(target, serviceKey)));
+      const settled = await Promise.allSettled(targets.map((target) => (
+        withWeatherCache(`marine:${target.id}`, () => getShortMarineRows(target, serviceKey))
+      )));
       const results = settled.map((r, idx) => (
         r.status === 'fulfilled'
           ? { ...targets[idx], marine: r.value.rows, marineBase: r.value.base }
           : { ...targets[idx], marine: [], errors: [r.reason?.message || '단기해양예보 조회 실패'] }
       ));
       const hasData = results.some((item) => item.marine?.length);
-      return sendJson(res, 200, { ok: hasData, type, items: results, message: hasData ? '단기해양예보 조회 성공' : '단기해양예보 조회 결과가 없습니다.' });
+      const error = summarizeErrors(results);
+      return sendJson(res, 200, {
+        ok: hasData,
+        type,
+        items: results,
+        message: hasData ? '단기해양예보 조회 성공' : (error || '단기해양예보 조회 결과가 없습니다.'),
+        ...(error ? { error } : {})
+      });
     }
 
     if (!serviceKey || String(serviceKey).includes('여기에_공공데이터포털_인증키')) {
@@ -557,26 +613,44 @@ export default async function handler(req, res) {
 
     if (type === 'midterm') {
       const targets = venue ? [venue] : Object.values(VENUES);
-      const settled = await Promise.allSettled(targets.map((v) => getMidForecast(v, serviceKey)));
+      const settled = await Promise.allSettled(targets.map((v) => (
+        withWeatherCache(`midterm:${v.id}`, () => getMidForecast(v, serviceKey))
+      )));
       const results = settled.map((r, idx) => (
         r.status === 'fulfilled'
           ? r.value
           : { ...targets[idx], midterm: [], errors: [r.reason?.message || '중기예보 조회 실패'] }
       ));
       const hasData = results.some((item) => item.midterm?.length);
-      return sendJson(res, 200, { ok: hasData, type, items: results, message: hasData ? '중기예보 조회 성공' : '중기예보 조회 결과가 없습니다.' });
+      const error = summarizeErrors(results);
+      return sendJson(res, 200, {
+        ok: hasData,
+        type,
+        items: results,
+        message: hasData ? '중기예보 조회 성공' : (error || '중기예보 조회 결과가 없습니다.'),
+        ...(error ? { error } : {})
+      });
     }
 
     if (type === 'ultra' || type === 'current' || type === 'all') {
       const targets = venue ? [venue] : Object.values(VENUES);
-      const settled = await Promise.allSettled(targets.map((v) => getVenueWeather(v, serviceKey)));
+      const settled = await Promise.allSettled(targets.map((v) => (
+        withWeatherCache(`ultra:${v.id}`, () => getVenueWeather(v, serviceKey))
+      )));
       const results = settled.map((r, idx) => (
         r.status === 'fulfilled'
           ? r.value
           : { ...targets[idx], current: {}, ultra: [], errors: [r.reason?.message || '초단기실황·예보 조회 실패'] }
       ));
       const hasData = results.some((item) => item.ultra?.length || Object.keys(item.current || {}).length);
-      return sendJson(res, 200, { ok: hasData, type, items: results, message: hasData ? '초단기실황·예보 조회 성공' : '초단기실황·예보 조회 결과가 없습니다.' });
+      const error = summarizeErrors(results);
+      return sendJson(res, 200, {
+        ok: hasData,
+        type,
+        items: results,
+        message: hasData ? '초단기실황·예보 조회 성공' : (error || '초단기실황·예보 조회 결과가 없습니다.'),
+        ...(error ? { error } : {})
+      });
     }
 
     return sendJson(res, 400, { ok: false, message: `지원하지 않는 type입니다: ${type}` });
