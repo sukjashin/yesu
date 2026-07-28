@@ -57,8 +57,33 @@ function initVenueTabs() {
 
       if (mapModule?.map && mapModule?.markers?.[id]) {
         const venue = venueData[id];
+        const marker = mapModule.markers[id];
         mapModule.map.flyTo([venue.lat, venue.lng], 13, { duration: 0.6 });
-        mapModule.markers[id].openPopup();
+        marker.openPopup();
+
+        tab.classList.remove('is-locating');
+        void tab.offsetWidth;
+        tab.classList.add('is-locating');
+        window.setTimeout(() => tab.classList.remove('is-locating'), 900);
+
+        if (window.matchMedia('(max-width: 1000px)').matches) {
+          const panel = document.getElementById('venueWeatherPanel');
+          panel?.classList.remove('venue-focus-pulse');
+          void panel?.offsetWidth;
+          panel?.classList.add('venue-focus-pulse');
+
+          window.setTimeout(() => {
+            const popup = marker.getPopup()?.getElement?.();
+            const target = popup || document.getElementById('map') || panel;
+            if (!target) return;
+            const headerHeight = document.querySelector('.site-header')?.offsetHeight || 0;
+            const top = target.getBoundingClientRect().top + window.scrollY - headerHeight - 14;
+            const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+            window.scrollTo({ top: Math.max(0, top), behavior: reduceMotion ? 'auto' : 'smooth' });
+          }, 260);
+
+          window.setTimeout(() => panel?.classList.remove('venue-focus-pulse'), 1400);
+        }
       }
     });
   });
