@@ -312,39 +312,83 @@ async function loadWarningPanel() {
   }
 }
 
+function applyVenueWeatherItem(item, markers) {
+  const venue = venueData[item?.id];
+  if (!venue) return false;
+  const current = item.current || {};
+  const hasCurrent = Object.keys(current).length > 0
+    && [current.temp, current.humidity, current.wind, current.sky].some((value) => value !== null && value !== undefined && value !== '');
+  if (!hasCurrent) return false;
+
+  venue.nx = Number(item.nx);
+  venue.ny = Number(item.ny);
+  venue.stnId = item.stnId;
+  venue.awsName = item.awsName;
+  venue.temp = current.temp ?? venue.temp;
+  venue.humidity = current.humidity ?? venue.humidity;
+  venue.wind = current.wind ?? venue.wind;
+  venue.windDirText = current.windDirText ?? venue.windDirText;
+  venue.rain1h = current.rain1h || '강수없음';
+  venue.sky = current.sky || venue.sky;
+  venue.icon = current.icon || venue.icon;
+  venue.feels = current.feels ?? venue.temp;
+  venue.tempDiff = current.tempDiff ?? null;
+  if (item.ncstBase) {
+    venue.baseLabel = formatPopupTimeLabel(item.ncstBase.baseDate, item.ncstBase.baseTime);
+  }
+  if (markers?.[venue.id]) markers[venue.id].setPopupContent(popupHTML(venue));
+  return true;
+}
+
+async function retryVenueWeather(venueIds, markers) {
+  for (const venueId of venueIds) {
+    try {
+      const retryData = await api.getWeather({ type: 'ultra', venueId });
+      const retryItem = retryData.items?.[0];
+      if (!retryData.ok || !applyVenueWeatherItem(retryItem, markers)) {
+        console.warn(`행사장 ${venueId} 초단기실황 개별 재조회 결과가 없습니다.`, retryItem?.errors || retryData.message);
+      }
+    } catch (error) {
+      console.error(`행사장 ${venueId} 초단기실황 개별 재조회 실패:`, error);
+    }
+  }
+}
+
 async function loadVenueWeather() {
   const markers = window.yeosuMap?.markers;
   try {
     const data = await api.getWeather({ type: 'ultra' });
     if (!data.ok) throw new Error(data.message || '날씨 API 응답 오류');
 
+    const loadedIds = new Set();
+    const failedIds = [];
     (data.items || []).forEach((item) => {
-      const venue = venueData[item.id];
-      if (!venue) return;
-      const current = item.current || {};
-      venue.nx = Number(item.nx);
-      venue.ny = Number(item.ny);
-      venue.stnId = item.stnId;
-      venue.awsName = item.awsName;
-      venue.temp = current.temp ?? venue.temp;
-      venue.humidity = current.humidity ?? venue.humidity;
-      venue.wind = current.wind ?? venue.wind;
-      venue.windDirText = current.windDirText ?? venue.windDirText;
-      venue.rain1h = current.rain1h || '강수없음';
-      venue.sky = current.sky || venue.sky;
-      venue.icon = current.icon || venue.icon;
-      venue.feels = current.feels ?? venue.temp;
-      venue.tempDiff = current.tempDiff ?? null;
-      if (item.ncstBase) {
-        venue.baseLabel = formatPopupTimeLabel(item.ncstBase.baseDate, item.ncstBase.baseTime);
-      }
-      if (markers?.[venue.id]) markers[venue.id].setPopupContent(popupHTML(venue));
+      if (applyVenueWeatherItem(item, markers)) loadedIds.add(Number(item.id));
+      else if (item?.id) failedIds.push(Number(item.id));
     });
+
+    Object.keys(venueData).map(Number).forEach((id) => {
+      if (!loadedIds.has(id) && !failedIds.includes(id)) failedIds.push(id);
+    });
+    if (failedIds.length) await retryVenueWeather(failedIds, markers);
 
     // 상단 배너 시각은 실시간 시계(setCurrentDateLabels)가 담당하므로 여기서는 덮어쓰지 않습니다.
   } catch (error) {
-    console.error('초단기실황 표시 실패:', error);
+    console.error('초단기실황 일괄 조회 실패, 행사장별로 재조회합니다:', error);
+    await retryVenueWeather(Object.keys(venueData).map(Number), markers);
   }
+}
+
+function initVenuePopupWeatherRetry() {
+  const markers = window.yeosuMap?.markers;
+  Object.entries(markers || {}).forEach(([id, marker]) => {
+    marker.on('popupopen', () => {
+      const venue = venueData[Number(id)];
+      if (venue?.temp === null || venue?.temp === undefined) {
+        retryVenueWeather([Number(id)], markers);
+      }
+    });
+  });
 }
 
 async function initApiStatus() {
@@ -438,6 +482,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     initForecastModal();
     initVenueTabs();
+    initVenuePopupWeatherRetry();
     initRefreshButton();
     initPageLinks();
     initRadarPlayer();

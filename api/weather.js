@@ -23,7 +23,7 @@ function sendJson(res, status, body) {
   if (typeof res.setHeader === 'function') {
     res.setHeader(
       'Cache-Control',
-      status === 200 && body?.ok
+      status === 200 && body?.ok && !body?.error
         ? 'public, max-age=60, s-maxage=600, stale-while-revalidate=1800'
         : 'no-store'
     );

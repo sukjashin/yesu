@@ -17,6 +17,7 @@ const liveForecast = {
   marine: {},
   combined: {}
 };
+let loadSequence = 0;
 
 function renderLoading(message) {
   const body = document.getElementById('fmBody');
@@ -230,6 +231,7 @@ export function renderForecastTable(){
 }
 
 async function loadTabData(tab, venueId) {
+  const requestSequence = ++loadSequence;
   if (liveForecast[tab]?.[venueId]) {
     renderForecastTable();
     return;
@@ -238,16 +240,38 @@ async function loadTabData(tab, venueId) {
   renderLoading(tab === 'combined' ? '단기 · 해양 날씨를 불러오는 중입니다.' : (tab === 'midterm' ? '단기예보를 불러오는 중입니다.' : (tab === 'marine' ? '단기해양예보를 불러오는 중입니다.' : '초단기예보를 불러오는 중입니다.')));
   try {
     if (tab === 'combined') {
-      const data = await api.getWeather({ type: 'combined', venueId });
-      const item = data.items?.[0] || {};
-      if (!data.ok) throw new Error(data.error || data.message || '단기·해양예보 API 응답 오류');
+      let item;
+      try {
+        const data = await api.getWeather({ type: 'combined', venueId });
+        item = data.items?.[0] || {};
+        if (!data.ok || (!item.midterm?.length && !item.marine?.length)) {
+          throw new Error(data.error || data.message || '단기·해양예보 API 응답 오류');
+        }
+      } catch (combinedError) {
+        console.warn('통합 예보 API 실패, 개별 API로 재조회합니다:', combinedError.message);
+        const [midData, marineData] = await Promise.all([
+          api.getWeather({ type: 'midterm', venueId }),
+          api.getWeather({ type: 'marine', venueId })
+        ]);
+        const midItem = midData.items?.[0] || {};
+        const marineItem = marineData.items?.[0] || {};
+        if (!midData.ok && !marineData.ok) throw combinedError;
+        item = {
+          midterm: midItem.midterm || [],
+          marine: marineItem.marine || [],
+          shortBase: midItem.shortBase,
+          marineBase: marineItem.marineBase
+        };
+      }
       liveForecast.combined[venueId] = {
         midterm: item.midterm || [],
         marine: item.marine || [],
         shortBase: item.shortBase,
         marineBase: item.marineBase
       };
-      renderForecastTable();
+      if (requestSequence === loadSequence && getCurrentTab() === tab && getCurrentVenueId() === venueId) {
+        renderForecastTable();
+      }
       return;
     }
 
@@ -258,10 +282,14 @@ async function loadTabData(tab, venueId) {
     if (tab === 'midterm') liveForecast.midterm[venueId] = item?.midterm || [];
     else if (tab === 'marine') liveForecast.marine[venueId] = item?.marine || [];
     else liveForecast.ultra[venueId] = item?.ultra || [];
-    renderForecastTable();
+    if (requestSequence === loadSequence && getCurrentTab() === tab && getCurrentVenueId() === venueId) {
+      renderForecastTable();
+    }
   } catch (error) {
     console.error('상세 예보 조회 실패:', error);
-    renderError(`${error.message}<br/>실제 기상청 데이터를 불러오지 못해 표시는 비워두었습니다.`);
+    if (requestSequence === loadSequence && getCurrentTab() === tab && getCurrentVenueId() === venueId) {
+      renderError(`${error.message}<br/>실제 기상청 데이터를 불러오지 못해 표시는 비워두었습니다.`);
+    }
   }
 }
 
