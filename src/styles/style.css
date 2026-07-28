@@ -236,7 +236,7 @@
     .warn-text-copy{display:none;}
     .venue-tab.is-locating .badge,
     #venueWeatherPanel.venue-focus-pulse,
-    .leaflet-popup{animation:none !important;}
+    .leaflet-popup-content-wrapper{animation:none !important;}
   }
 
   #map{ height:340px; margin:14px 20px 20px; border-radius:14px; overflow:hidden; border:1px solid var(--line); z-index:1;}
@@ -244,7 +244,7 @@
   @media (max-width:768px){
     #venueWeatherPanel.venue-focus-pulse{animation:venuePanelFocus 1.2s ease both;}
     #map{height:320px; margin:10px 12px 14px;}
-    .leaflet-popup{animation:venuePopupSlide .45s cubic-bezier(.2,.8,.2,1) both;}
+    .leaflet-popup-content-wrapper{animation:venuePopupSlide .45s cubic-bezier(.2,.8,.2,1) both;}
   }
 
   @keyframes venuePanelFocus{

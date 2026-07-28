@@ -42,6 +42,8 @@ function setCurrentDateLabels() {
 }
 
 
+let venueFocusSequence = 0;
+
 function initVenueTabs() {
   const tabs = document.querySelectorAll(".venue-tab");
 
@@ -58,31 +60,47 @@ function initVenueTabs() {
       if (mapModule?.map && mapModule?.markers?.[id]) {
         const venue = venueData[id];
         const marker = mapModule.markers[id];
-        mapModule.map.flyTo([venue.lat, venue.lng], 13, { duration: 0.6 });
-        marker.openPopup();
+        const isMobile = window.matchMedia('(max-width: 1000px)').matches;
+        const focusSequence = ++venueFocusSequence;
+        let venueRevealed = false;
 
         tab.classList.remove('is-locating');
         void tab.offsetWidth;
         tab.classList.add('is-locating');
         window.setTimeout(() => tab.classList.remove('is-locating'), 900);
 
-        if (window.matchMedia('(max-width: 1000px)').matches) {
+        const revealVenueWeather = () => {
+          if (focusSequence !== venueFocusSequence || venueRevealed) return;
+          venueRevealed = true;
+          marker.openPopup();
+
+          if (!isMobile) return;
           const panel = document.getElementById('venueWeatherPanel');
           panel?.classList.remove('venue-focus-pulse');
           void panel?.offsetWidth;
           panel?.classList.add('venue-focus-pulse');
 
           window.setTimeout(() => {
-            const popup = marker.getPopup()?.getElement?.();
-            const target = popup || document.getElementById('map') || panel;
+            if (focusSequence !== venueFocusSequence) return;
+            const target = document.getElementById('map') || panel;
             if (!target) return;
             const headerHeight = document.querySelector('.site-header')?.offsetHeight || 0;
             const top = target.getBoundingClientRect().top + window.scrollY - headerHeight - 14;
             const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
             window.scrollTo({ top: Math.max(0, top), behavior: reduceMotion ? 'auto' : 'smooth' });
-          }, 260);
+          }, 120);
 
           window.setTimeout(() => panel?.classList.remove('venue-focus-pulse'), 1400);
+        };
+
+        if (isMobile) {
+          mapModule.map.stop();
+          mapModule.map.once('moveend', revealVenueWeather);
+          mapModule.map.flyTo([venue.lat, venue.lng], 13, { duration: 0.45 });
+          window.setTimeout(revealVenueWeather, 650);
+        } else {
+          mapModule.map.flyTo([venue.lat, venue.lng], 13, { duration: 0.6 });
+          marker.openPopup();
         }
       }
     });
