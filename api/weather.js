@@ -6,7 +6,7 @@ const VILAGE_BASE_URL = 'https://apis.data.go.kr/1360000/VilageFcstInfoService_2
 const MID_BASE_URL = 'https://apis.data.go.kr/1360000/MidFcstInfoService';
 const KMA_REQUEST_TIMEOUT_MS = 7000;
 const KMA_REQUEST_RETRIES = 2;
-const WEATHER_CACHE_TTL_MS = 5 * 60 * 1000;
+const WEATHER_CACHE_TTL_MS = 10 * 60 * 1000;
 const weatherCache = new Map();
 
 const MID_LAND_REG_ID = '11F20000'; // 광주·전라남도(중기육상예보 공통 지역코드)
@@ -20,6 +20,14 @@ const VENUES = {
 };
 
 function sendJson(res, status, body) {
+  if (typeof res.setHeader === 'function') {
+    res.setHeader(
+      'Cache-Control',
+      status === 200 && body?.ok
+        ? 'public, max-age=60, s-maxage=600, stale-while-revalidate=1800'
+        : 'no-store'
+    );
+  }
   if (typeof res.status === 'function') return res.status(status).json(body);
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -501,22 +509,24 @@ function buildShortMarineRow(date, bucket) {
   return { date, am, pm, waveAm, wavePm };
 }
 
-async function getShortForecastRows(venue, serviceKey, { includeToday = false } = {}) {
-  const common = { pageNo: '1', numOfRows: '1000', nx: venue.nx, ny: venue.ny };
-  const { items } = await callWithBaseFallback(getVilageFcstBase, `${VILAGE_BASE_URL}/getVilageFcst`, common, serviceKey, 4);
-  const todayStr = formatDateKst(kstNow());
-  const byDate = groupShortFcstByDate(items, todayStr, { includeToday });
-  const dates = Array.from(byDate.keys()).sort().slice(0, 3);
-  return dates.map((date) => buildShortDayRow(date, byDate.get(date)));
-}
-
-async function getShortMarineRows(venue, serviceKey) {
+async function getShortForecastData(venue, serviceKey, { includeToday = false } = {}) {
   const common = { pageNo: '1', numOfRows: '1000', nx: venue.nx, ny: venue.ny };
   const { items, base } = await callWithBaseFallback(getVilageFcstBase, `${VILAGE_BASE_URL}/getVilageFcst`, common, serviceKey, 4);
   const todayStr = formatDateKst(kstNow());
-  const byDate = groupShortFcstByDate(items, todayStr);
+  const byDate = groupShortFcstByDate(items, todayStr, { includeToday });
   const dates = Array.from(byDate.keys()).sort().slice(0, 3);
-  return { base, rows: dates.map((date) => buildShortMarineRow(date, byDate.get(date))) };
+  return {
+    base,
+    weather: dates.map((date) => buildShortDayRow(date, byDate.get(date))),
+    marine: dates.map((date) => buildShortMarineRow(date, byDate.get(date)))
+  };
+}
+
+function getCachedShortForecast(venue, serviceKey) {
+  return withWeatherCache(
+    `short:${venue.id}`,
+    () => getShortForecastData(venue, serviceKey)
+  );
 }
 
 function mergeForecastRows(...rowGroups) {
@@ -564,16 +574,24 @@ async function getVenueWeather(venue, serviceKey) {
 }
 
 async function getMidForecast(venue, serviceKey) {
-  const [mid, shortRows] = await Promise.all([
-    callMidBothWithFallback(venue, serviceKey),
-    getShortForecastRows(venue, serviceKey).catch((error) => {
-      console.warn('단기예보(내일부터 3일) 조회 실패:', error.message);
-      return [];
-    })
-  ]);
-  const midRows = parseMidForecast(mid.landItems, mid.tempItems, mid.tmFc.slice(0, 8));
-  const combined = mergeForecastRows(shortRows, midRows).slice(0, 3);
-  return { ...venue, tmFc: mid.tmFc, midterm: combined };
+  const short = await getCachedShortForecast(venue, serviceKey);
+  return { ...venue, shortBase: short.base, midterm: short.weather };
+}
+
+async function getMarineForecast(venue, serviceKey) {
+  const short = await getCachedShortForecast(venue, serviceKey);
+  return { ...venue, marineBase: short.base, marine: short.marine };
+}
+
+async function getCombinedForecast(venue, serviceKey) {
+  const short = await getCachedShortForecast(venue, serviceKey);
+  return {
+    ...venue,
+    shortBase: short.base,
+    marineBase: short.base,
+    midterm: short.weather,
+    marine: short.marine
+  };
 }
 
 export default async function handler(req, res) {
@@ -583,17 +601,39 @@ export default async function handler(req, res) {
   const type = query.type || 'all';
 
   try {
+    if (type === 'combined') {
+      if (!serviceKey || String(serviceKey).includes('여기에_공공데이터포털_인증키')) {
+        return sendJson(res, 200, { ok: false, resultCode: 'NO_SERVICE_KEY', type, items: [], message: 'KMA_SERVICE_KEY가 설정되지 않았습니다.' });
+      }
+      const targets = venue ? [venue] : Object.values(VENUES);
+      const settled = await Promise.allSettled(targets.map((target) => getCombinedForecast(target, serviceKey)));
+      const results = settled.map((r, idx) => (
+        r.status === 'fulfilled'
+          ? r.value
+          : { ...targets[idx], midterm: [], marine: [], errors: [r.reason?.message || '단기·해양예보 조회 실패'] }
+      ));
+      const hasData = results.some((item) => item.midterm?.length || item.marine?.length);
+      const error = summarizeErrors(results);
+      return sendJson(res, 200, {
+        ok: hasData,
+        type,
+        items: results,
+        message: hasData ? '단기·해양예보 조회 성공' : (error || '단기·해양예보 조회 결과가 없습니다.'),
+        ...(error ? { error } : {})
+      });
+    }
+
     if (type === 'marine') {
       if (!serviceKey || String(serviceKey).includes('여기에_공공데이터포털_인증키')) {
         return sendJson(res, 200, { ok: false, resultCode: 'NO_SERVICE_KEY', type, items: [], message: 'KMA_SERVICE_KEY가 설정되지 않았습니다.' });
       }
       const targets = venue ? [venue] : Object.values(VENUES);
       const settled = await Promise.allSettled(targets.map((target) => (
-        withWeatherCache(`marine:${target.id}`, () => getShortMarineRows(target, serviceKey))
+        getMarineForecast(target, serviceKey)
       )));
       const results = settled.map((r, idx) => (
         r.status === 'fulfilled'
-          ? { ...targets[idx], marine: r.value.rows, marineBase: r.value.base }
+          ? r.value
           : { ...targets[idx], marine: [], errors: [r.reason?.message || '단기해양예보 조회 실패'] }
       ));
       const hasData = results.some((item) => item.marine?.length);

@@ -72,7 +72,10 @@ function renderCombinedForecast(data, venue) {
   const alignedMarineRows = displayDates.map((date) => marineByDate.get(date) || { date });
   const weatherColspan = Math.max(displayDates.length * 2, 1);
   const marineColspan = Math.max(displayDates.length * 2, 1);
-  const announced = formatTmFc(data.tmFc || data.midSeaTmFc);
+  const shortBase = data.shortBase || data.marineBase;
+  const announced = shortBase?.baseDate && shortBase?.baseTime
+    ? formatTmFc(`${shortBase.baseDate}${shortBase.baseTime}`)
+    : '';
   const weatherHeader = displayDates.map((date) => {
     const meta = dateMetaFromYmd(date);
     const sub = daySubLabel(date);
@@ -138,7 +141,7 @@ function renderCombinedForecast(data, venue) {
     ${announced ? `<div class="combo-issued"><b>발표시간:</b> ${announced}</div>` : ''}
     <section class="combo-section">${weatherTable}</section>
     <section class="combo-section">${marineTable}</section>
-    <div class="fm-note">날씨예보: ${venue.place} 격자 nx ${venue.nx}, ny ${venue.ny} · 해양예보: 기상청 단기예보 파고(WAV) 기준</div>
+    <div class="fm-note">기상청 단기예보 getVilageFcst 기준 · ${venue.place} 격자 nx ${venue.nx}, ny ${venue.ny} · 파고(WAV)</div>
   </div>`;
 }
 
@@ -235,22 +238,14 @@ async function loadTabData(tab, venueId) {
   renderLoading(tab === 'combined' ? '단기 · 해양 날씨를 불러오는 중입니다.' : (tab === 'midterm' ? '단기예보를 불러오는 중입니다.' : (tab === 'marine' ? '단기해양예보를 불러오는 중입니다.' : '초단기예보를 불러오는 중입니다.')));
   try {
     if (tab === 'combined') {
-      const [midData, marineData] = await Promise.all([
-        api.getWeather({ type: 'midterm', venueId }),
-        api.getWeather({ type: 'marine', venueId })
-      ]);
-      const midItem = midData.items?.[0] || {};
-      const marineItem = marineData.items?.[0] || {};
-      if (!midData.ok && !marineData.ok) {
-        throw new Error([midData.error || midData.message, marineData.error || marineData.message].filter(Boolean).join(' / '));
-      }
-      if (!midData.ok) console.warn(midData.error || midData.message || '단기예보 API 응답 오류');
-      if (!marineData.ok) console.warn(marineData.error || marineData.message || '해양예보 API 응답 오류');
+      const data = await api.getWeather({ type: 'combined', venueId });
+      const item = data.items?.[0] || {};
+      if (!data.ok) throw new Error(data.error || data.message || '단기·해양예보 API 응답 오류');
       liveForecast.combined[venueId] = {
-        midterm: midItem.midterm || [],
-        marine: marineItem.marine || [],
-        tmFc: midItem.tmFc,
-        marineBase: marineItem.marineBase
+        midterm: item.midterm || [],
+        marine: item.marine || [],
+        shortBase: item.shortBase,
+        marineBase: item.marineBase
       };
       renderForecastTable();
       return;
