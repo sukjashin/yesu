@@ -1,6 +1,8 @@
 const DEFAULT_REG_ID = '4613000000'; // 전남 여수시 행정구역 코드
 const EMPTY_WARNING_TEXT = '내용없음';
 const WARNING_URL = 'https://apis.data.go.kr/1360000/VilageFcstMsgService/getWthrWrnInfo';
+// 날씨누리 특보(종합) 페이지가 화면에 삽입하는 공식 특보 표 HTML 조각입니다.
+// https://www.weather.go.kr/w/special-report/overall.do
 const KMA_WARNING_HTML_URL = 'https://www.weather.go.kr/w/wnuri-fct2021/weather/warning.do';
 
 function sendJson(res, status, body) {
@@ -93,28 +95,28 @@ function shorten(value = '', max = 180) {
 }
 
 function isYeosuIncludedArea(text = '') {
-  const value = normalizeText(text);
-  if (value.includes('여수')) return true;
-  if (!value.includes('전라남도')) return false;
+  const value = normalizeText(text).replace(/\s/g, '');
 
-  // "전라남도(흑산도.홍도, 거문도.초도, 완도여서도 제외)"처럼
-  // 제외 지역만 괄호에 표기된 경우 여수시는 전라남도 전체 대상에 포함됩니다.
-  return value.includes('제외') && !value.includes('여수 제외') && !value.includes('여수시 제외');
+  // 날씨누리는 전남 전체가 아닌 경우에도
+  // "전라남도(무안군북부)"처럼 광역지자체명을 함께 표시합니다.
+  // 따라서 '전라남도' 또는 '제외' 문구로 추론하지 않고,
+  // 여수시(별도 특보구역인 거문도·초도 포함)가 명시된 행만 선택합니다.
+  return value.includes('여수시') || /\uAC70\uBB38\uB3C4[.·ㆍ]\uCD08\uB3C4/.test(value);
 }
 
 function includesTargetArea(item, regId) {
   const joined = Object.values(item).join(' ');
-  return joined.includes('여수') || joined.includes(regId) || joined.includes('46130') || joined.includes('전라남도');
+  return isYeosuIncludedArea(joined) || joined.includes(regId) || joined.includes('46130');
 }
 
 function makeDisplayText(items = [], regId = DEFAULT_REG_ID) {
   if (!items.length) return EMPTY_WARNING_TEXT;
 
   const targetItems = items.filter((item) => includesTargetArea(item, regId));
-  const pool = targetItems.length ? targetItems : items;
+  if (!targetItems.length) return EMPTY_WARNING_TEXT;
 
   const texts = [];
-  for (const item of pool) {
+  for (const item of targetItems) {
     const candidates = [
       item.wrnMsg,
       item.warningMsg,
@@ -186,12 +188,7 @@ function makeWeatherNuriDisplayText(rows = []) {
   for (const row of targetRows) {
     const key = `${row.kind}${row.level}`;
     if (!byWarning.has(key)) {
-      const area = row.area.includes('여수')
-        ? '여수시'
-        : row.area.includes('전라남도')
-          ? '여수시 포함 전라남도'
-          : row.area;
-      byWarning.set(key, `${row.kind}${row.level} : ${area}`);
+      byWarning.set(key, `${row.kind}${row.level} : 여수시`);
     }
   }
 
