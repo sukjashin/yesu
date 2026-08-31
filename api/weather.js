@@ -319,7 +319,7 @@ function skyText(value) {
 }
 
 function ptyText(value) {
-  return { '0': '없음', '1': '비', '2': '비/눈', '3': '눈', '5': '빗방울', '6': '빗방울눈날림', '7': '눈날림' }[String(value)] || '없음';
+  return { '0': '없음', '1': '비', '2': '비/눈', '3': '눈', '4': '소나기', '5': '빗방울', '6': '빗방울눈날림', '7': '눈날림' }[String(value)] || '없음';
 }
 
 function weatherIcon(sky, pty) {
