@@ -1,9 +1,7 @@
 import "./styles/style.css";
 import { inject } from '@vercel/analytics';
 
-if (import.meta.env.PROD) {
-  inject({ mode: 'production' });
-}
+inject();
 
 import { initMap } from "./components/map.js";
 import { initForecastModal } from "./components/forecast-modal.js";
